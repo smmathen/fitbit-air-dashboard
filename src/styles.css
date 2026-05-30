@@ -268,7 +268,7 @@ button { cursor: pointer; font-family: inherit; }
 .stats-row {
   grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
   gap: 12px;
 }
 .stat-card {
@@ -512,7 +512,7 @@ button { cursor: pointer; font-family: inherit; }
 .workout-summary-row {
   grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 12px;
 }
 .workout-summary-stat {

@@ -5,6 +5,9 @@ import {
   fetchHRV,
   fetchSpO2,
   fetchRestingHR,
+  fetchActiveZoneMinutes,
+  fetchSedentaryTime,
+  fetchVo2Max,
   fetchSleep,
   fetchExercise,
   today,
@@ -29,8 +32,10 @@ export function useHealthData(days = 7) {
     setLoading(true);
     setError(null);
     try {
-      const [steps, distance, activeMinutes, calories, sleep, heartRate, hrv, spo2, rhr, exercise] =
-        await Promise.allSettled([
+      const [
+        steps, distance, activeMinutes, calories, sleep, heartRate,
+        hrv, spo2, rhr, exercise, activeZoneMinutes, sedentaryTime, vo2Max,
+      ] = await Promise.allSettled([
           fetchDailyRollup('steps', startDate, endDate),
           fetchDailyRollup('distance', startDate, endDate),
           fetchDailyRollup('active-minutes', startDate, endDate),
@@ -41,6 +46,9 @@ export function useHealthData(days = 7) {
           fetchSpO2(startDate, endDate),
           fetchRestingHR(startDate, endDate),
           fetchExercise(startDate, endDate),
+          fetchActiveZoneMinutes(startDate, endDate),
+          fetchSedentaryTime(startDate, endDate),
+          fetchVo2Max(startDate, endDate),
         ]);
 
       setData({
@@ -54,6 +62,9 @@ export function useHealthData(days = 7) {
         spo2: spo2.status === 'fulfilled' ? spo2.value : null,
         rhr: rhr.status === 'fulfilled' ? rhr.value : null,
         exercise: exercise.status === 'fulfilled' ? exercise.value : null,
+        activeZoneMinutes: activeZoneMinutes.status === 'fulfilled' ? activeZoneMinutes.value : null,
+        sedentaryTime: sedentaryTime.status === 'fulfilled' ? sedentaryTime.value : null,
+        vo2Max: vo2Max.status === 'fulfilled' ? vo2Max.value : null,
         fetchedAt: new Date(),
       });
     } catch (err) {

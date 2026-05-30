@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import {
   AreaChart, Area, BarChart, Bar, LineChart, Line,
-  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell
+  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, Legend
 } from 'recharts';
 import { useHealthData } from '../hooks/useHealthData';
 import StatCard from '../components/StatCard';
@@ -41,6 +41,145 @@ function parseDaily(apiResp, field) {
     const value = num(payload?.rmssd ?? payload?.percentage ?? payload?.beatsPerMinute ?? payload?.count);
     return { date: formatDate(dateStr), value };
   }).filter(d => d.value != null);
+}
+
+const HR_ZONE_ORDER = ['LIGHT', 'FAT_BURN', 'MODERATE', 'CARDIO', 'VIGOROUS', 'PEAK'];
+const HR_ZONE_META = {
+  LIGHT: { label: 'Light', color: '#60a5fa' },
+  FAT_BURN: { label: 'Fat Burn', color: '#fbbf24' },
+  MODERATE: { label: 'Moderate', color: '#fb923c' },
+  CARDIO: { label: 'Cardio', color: '#f97316' },
+  VIGOROUS: { label: 'Vigorous', color: '#ef4444' },
+  PEAK: { label: 'Peak', color: '#dc2626' },
+};
+
+function parseDistance(apiResp) {
+  return parseDaily(apiResp, 'distance').map(d => ({
+    date: d.date,
+    value: d.value / 1_000_000,
+  }));
+}
+
+function parseZoneCalories(apiResp) {
+  if (!apiResp?.rollupDataPoints) return { daily: [], zoneKeys: [] };
+
+  const zoneKeys = new Set();
+  const daily = [];
+
+  for (const pt of apiResp.rollupDataPoints) {
+    const dateStr = civilDateStr(pt.civilStartTime);
+    const zones = pt.caloriesInHeartRateZone?.caloriesInHeartRateZones;
+    if (!zones?.length) continue;
+
+    const row = { date: formatDate(dateStr) };
+    let total = 0;
+    for (const z of zones) {
+      const key = z.heartRateZone;
+      if (!key || key === 'HEART_RATE_ZONE_TYPE_UNSPECIFIED') continue;
+      const kcal = num(z.kcal) || 0;
+      row[key] = (row[key] || 0) + kcal;
+      total += kcal;
+      zoneKeys.add(key);
+    }
+    row.total = total;
+    daily.push(row);
+  }
+
+  const zoneKeysOrdered = HR_ZONE_ORDER.filter(z => zoneKeys.has(z));
+  for (const z of zoneKeys) {
+    if (!zoneKeysOrdered.includes(z)) zoneKeysOrdered.push(z);
+  }
+
+  return { daily, zoneKeys: zoneKeysOrdered };
+}
+
+const AZM_ZONE_KEYS = ['FAT_BURN', 'CARDIO', 'PEAK'];
+const AZM_ZONE_META = {
+  FAT_BURN: { label: 'Fat Burn', color: '#fbbf24' },
+  CARDIO: { label: 'Cardio', color: '#f97316' },
+  PEAK: { label: 'Peak', color: '#dc2626' },
+};
+
+const FITNESS_LEVELS = {
+  POOR: 'Poor',
+  FAIR: 'Fair',
+  AVERAGE: 'Average',
+  GOOD: 'Good',
+  VERY_GOOD: 'Very Good',
+  EXCELLENT: 'Excellent',
+};
+
+function parseDurationSeconds(str) {
+  if (str == null) return 0;
+  const m = String(str).match(/^([\d.]+)s$/);
+  if (m) return parseFloat(m[1]);
+  const n = Number(str);
+  return Number.isNaN(n) ? 0 : n;
+}
+
+function parseActiveZoneMinutes(apiResp) {
+  if (!apiResp?.rollupDataPoints) return { daily: [], zoneKeys: AZM_ZONE_KEYS };
+
+  const daily = [];
+  for (const pt of apiResp.rollupDataPoints) {
+    const azm = pt.activeZoneMinutes;
+    if (!azm) continue;
+
+    const fatBurn = num(azm.sumInFatBurnHeartZone) || 0;
+    const cardio = num(azm.sumInCardioHeartZone) || 0;
+    const peak = num(azm.sumInPeakHeartZone) || 0;
+    const total = fatBurn + cardio + peak;
+    if (total <= 0) continue;
+
+    daily.push({
+      date: formatDate(civilDateStr(pt.civilStartTime)),
+      FAT_BURN: fatBurn,
+      CARDIO: cardio,
+      PEAK: peak,
+      total,
+    });
+  }
+
+  return { daily, zoneKeys: AZM_ZONE_KEYS };
+}
+
+function parseSedentary(apiResp) {
+  if (!apiResp?.rollupDataPoints) return [];
+
+  return apiResp.rollupDataPoints.map((pt) => {
+    const durationSec = parseDurationSeconds(pt.sedentaryPeriod?.durationSum);
+    const minutes = Math.round(durationSec / 60);
+    return { date: formatDate(civilDateStr(pt.civilStartTime)), value: minutes };
+  }).filter(d => d.value > 0);
+}
+
+function parseVo2Max(apiResp) {
+  if (!apiResp?.dataPoints) return [];
+
+  return apiResp.dataPoints.map((pt) => {
+    const v = pt.dailyVo2Max;
+    if (!v || v.vo2Max == null) return null;
+    const d = v.date;
+    const dateStr = d
+      ? `${d.year}-${String(d.month).padStart(2, '0')}-${String(d.day).padStart(2, '0')}`
+      : null;
+    return {
+      date: formatDate(dateStr),
+      value: num(v.vo2Max),
+      level: v.cardioFitnessLevel,
+      estimated: v.estimated,
+    };
+  }).filter(d => d?.value != null);
+}
+
+function formatFitnessLevel(level) {
+  if (!level || level === 'CARDIO_FITNESS_LEVEL_UNSPECIFIED') return null;
+  return FITNESS_LEVELS[level] || level.replace(/_/g, ' ').toLowerCase();
+}
+
+function formatDistanceKm(km) {
+  if (km == null || km <= 0) return null;
+  return km >= 1 ? `${km.toFixed(2)} km` : `${Math.round(km * 1000)} m`;
 }
 
 function parseSleep(apiResp) {
@@ -106,8 +245,12 @@ export default function Dashboard({ onLogout }) {
   useEffect(() => { refetch(); }, [days]);
 
   const steps = parseDaily(data?.steps, 'steps');
-  const distance = parseDaily(data?.distance, 'distance');
+  const distance = parseDistance(data?.distance);
   const activeMin = parseDaily(data?.activeMinutes, 'activeMinutes');
+  const zoneCalories = parseZoneCalories(data?.calories);
+  const azm = parseActiveZoneMinutes(data?.activeZoneMinutes);
+  const sedentary = parseSedentary(data?.sedentaryTime);
+  const vo2Max = parseVo2Max(data?.vo2Max);
   const sleep = parseSleep(data?.sleep);
   const hr = parseHR(data?.heartRate);
   const hrv = parseDaily(data?.hrv, 'dailyHeartRateVariability');
@@ -115,7 +258,12 @@ export default function Dashboard({ onLogout }) {
   const rhr = parseDaily(data?.rhr, 'dailyRestingHeartRate');
 
   const todaySteps = latest(steps);
+  const todayDistance = latest(distance);
   const todayActiveMin = latest(activeMin);
+  const todayZoneCal = latest(zoneCalories.daily, 'total');
+  const todayAzm = latest(azm.daily, 'total');
+  const todaySedentary = latest(sedentary);
+  const latestVo2 = vo2Max[vo2Max.length - 1];
   const todaySleep = sleep[sleep.length - 1];
   const latestHRV = latest(hrv);
   const latestSpO2 = latest(spo2);
@@ -180,7 +328,12 @@ export default function Dashboard({ onLogout }) {
         {/* ── Stat row ── */}
         <section className="stats-row">
           <StatCard icon="👟" label="Steps today" value={todaySteps?.toLocaleString()} color="#3b82f6" />
+          <StatCard icon="📏" label="Distance" value={todayDistance != null ? formatDistanceKm(todayDistance) : null} color="#6366f1" />
           <StatCard icon="🏃" label="Active min" value={todayActiveMin} unit="min" color="#10b981" />
+          <StatCard icon="🔥" label="Zone calories" value={todayZoneCal != null ? Math.round(todayZoneCal) : null} unit="kcal" color="#f97316" />
+          <StatCard icon="⚡" label="Zone minutes" value={todayAzm != null ? Math.round(todayAzm) : null} unit="min" color="#eab308" />
+          <StatCard icon="💨" label="VO2 max" value={latestVo2?.value != null ? latestVo2.value.toFixed(1) : null} unit="ml/kg/min" sub={formatFitnessLevel(latestVo2?.level)} color="#14b8a6" />
+          <StatCard icon="🪑" label="Sedentary" value={todaySedentary != null ? formatDuration(todaySedentary) : null} color="#64748b" />
           <StatCard icon="😴" label="Sleep" value={todaySleep ? formatDuration(todaySleep.duration) : null} sub={todaySleep?.score ? `Score ${todaySleep.score}` : null} color="#8b5cf6" />
           <StatCard icon="❤️" label="Resting HR" value={latestRHR ? Math.round(latestRHR) : null} unit="bpm" color="#ef4444" />
           <StatCard icon="🌊" label="HRV" value={latestHRV ? Math.round(latestHRV) : null} unit="ms" color="#f59e0b" />
@@ -200,6 +353,26 @@ export default function Dashboard({ onLogout }) {
                 <Bar dataKey="value" name="Steps" radius={[4, 4, 0, 0]}>
                   {steps.map((_, i) => (
                     <Cell key={i} fill={i === steps.length - 1 ? 'var(--accent)' : 'var(--bar-muted)'} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          ) : <EmptyState />}
+        </section>
+
+        {/* ── Distance chart ── */}
+        <section className="chart-card wide">
+          <h2>Daily Distance</h2>
+          {distance.length > 0 ? (
+            <ResponsiveContainer width="100%" height={200}>
+              <BarChart data={distance} barCategoryGap="30%">
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--grid)" vertical={false} />
+                <XAxis dataKey="date" tick={{ fontSize: 11, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 11, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false} width={45} tickFormatter={v => v >= 1 ? `${v.toFixed(1)} km` : `${Math.round(v * 1000)} m`} />
+                <Tooltip content={<CustomTooltip unit="km" />} />
+                <Bar dataKey="value" name="Distance" radius={[4, 4, 0, 0]}>
+                  {distance.map((_, i) => (
+                    <Cell key={i} fill={i === distance.length - 1 ? '#6366f1' : 'var(--bar-muted)'} />
                   ))}
                 </Bar>
               </BarChart>
@@ -279,6 +452,31 @@ export default function Dashboard({ onLogout }) {
           ) : <EmptyState />}
         </section>
 
+        {/* ── Zone calories chart ── */}
+        <section className="chart-card wide">
+          <h2>Calories by Heart Rate Zone</h2>
+          {zoneCalories.daily.length > 0 ? (
+            <ResponsiveContainer width="100%" height={220}>
+              <BarChart data={zoneCalories.daily} barCategoryGap="30%">
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--grid)" vertical={false} />
+                <XAxis dataKey="date" tick={{ fontSize: 11, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 11, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false} width={40} tickFormatter={v => `${v}`} />
+                <Tooltip content={<CustomTooltip unit="kcal" />} />
+                <Legend wrapperStyle={{ fontSize: 11 }} />
+                {zoneCalories.zoneKeys.map((zone) => (
+                  <Bar
+                    key={zone}
+                    dataKey={zone}
+                    name={HR_ZONE_META[zone]?.label || zone.replace(/_/g, ' ')}
+                    stackId="zones"
+                    fill={HR_ZONE_META[zone]?.color || '#94a3b8'}
+                  />
+                ))}
+              </BarChart>
+            </ResponsiveContainer>
+          ) : <EmptyState />}
+        </section>
+
         {/* ── Active Minutes ── */}
         <section className="chart-card half">
           <h2>Active Minutes</h2>
@@ -292,6 +490,67 @@ export default function Dashboard({ onLogout }) {
                 <Bar dataKey="value" name="Active min" radius={[4,4,0,0]}>
                   {activeMin.map((d, i) => (
                     <Cell key={i} fill={d.value >= 30 ? '#10b981' : '#6ee7b7'} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          ) : <EmptyState />}
+        </section>
+
+        {/* ── Active zone minutes chart ── */}
+        <section className="chart-card half">
+          <h2>Active Zone Minutes</h2>
+          {azm.daily.length > 0 ? (
+            <ResponsiveContainer width="100%" height={200}>
+              <BarChart data={azm.daily} barCategoryGap="30%">
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--grid)" vertical={false} />
+                <XAxis dataKey="date" tick={{ fontSize: 11, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 11, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false} width={35} />
+                <Tooltip content={<CustomTooltip unit="min" />} />
+                <Legend wrapperStyle={{ fontSize: 11 }} />
+                {azm.zoneKeys.map((zone) => (
+                  <Bar
+                    key={zone}
+                    dataKey={zone}
+                    name={AZM_ZONE_META[zone]?.label || zone}
+                    stackId="azm"
+                    fill={AZM_ZONE_META[zone]?.color || '#94a3b8'}
+                  />
+                ))}
+              </BarChart>
+            </ResponsiveContainer>
+          ) : <EmptyState />}
+        </section>
+
+        {/* ── VO2 max chart ── */}
+        <section className="chart-card half">
+          <h2>VO2 Max (Cardio Fitness)</h2>
+          {vo2Max.length > 0 ? (
+            <ResponsiveContainer width="100%" height={200}>
+              <LineChart data={vo2Max}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--grid)" vertical={false} />
+                <XAxis dataKey="date" tick={{ fontSize: 11, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 11, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false} width={45} domain={['auto', 'auto']} tickFormatter={v => v.toFixed(1)} />
+                <Tooltip content={<CustomTooltip unit="ml/kg/min" />} />
+                <Line type="monotone" dataKey="value" name="VO2 max" stroke="#14b8a6" strokeWidth={2} dot={{ r: 3, fill: '#14b8a6' }} />
+              </LineChart>
+            </ResponsiveContainer>
+          ) : <EmptyState />}
+        </section>
+
+        {/* ── Sedentary time chart ── */}
+        <section className="chart-card half">
+          <h2>Sedentary Time</h2>
+          {sedentary.length > 0 ? (
+            <ResponsiveContainer width="100%" height={200}>
+              <BarChart data={sedentary} barCategoryGap="30%">
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--grid)" vertical={false} />
+                <XAxis dataKey="date" tick={{ fontSize: 11, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 11, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false} width={40} tickFormatter={v => `${Math.floor(v / 60)}h`} />
+                <Tooltip formatter={(v) => formatDuration(v)} content={<CustomTooltip />} />
+                <Bar dataKey="value" name="Sedentary" radius={[4, 4, 0, 0]}>
+                  {sedentary.map((d, i) => (
+                    <Cell key={i} fill={d.value >= 480 ? '#64748b' : '#94a3b8'} />
                   ))}
                 </Bar>
               </BarChart>

@@ -4,10 +4,12 @@ A local React dashboard for **your own** Fitbit Air data via the [Google Health 
 
 ## Features
 
-- **Overview** — steps, heart rate, sleep, HRV, SpO2, active minutes
+- **Overview** — steps, distance, heart rate, sleep, HRV, SpO2, active minutes, HR zone calories, active zone minutes, VO2 max, sedentary time
 - **Insights** — readiness score, workout → sleep correlation, period comparison
-- **Sleep** — hypnogram, stage breakdown, efficiency trend
-- **Workouts** — exercise log with duration, calories, distance, avg HR
+- **Sleep** — hypnogram, stage breakdown, efficiency trend (paginated — full history beyond 25 nights)
+- **Workouts** — exercise log with duration, calories, distance, avg HR, active zone minutes (paginated)
+
+Date ranges: 7 / 14 / 30 days.
 
 ## Setup for developers
 
@@ -44,17 +46,24 @@ VITE_GOOGLE_CLIENT_ID=123456789-abc.apps.googleusercontent.com
 
 ### 3. Install and run
 
-Two terminals:
+One terminal:
 
 ```bash
-# Terminal 1 — API proxy (avoids browser CORS against Google Health API)
 npm install
-node server.js
-
-# Terminal 2 — frontend
 npm run dev
 # Open http://localhost:3000
 ```
+
+There is **no separate backend**. API calls go through Vite's dev proxy (`/api/health` → `https://health.googleapis.com/v4`) to avoid browser CORS. OAuth and all fetch logic live in the frontend (`src/lib/healthApi.js`).
+
+For a production-style local test after building:
+
+```bash
+npm run build
+npm run preview
+```
+
+`npm run preview` also uses the Vite proxy — static hosting of `dist/` alone will not reach the Health API without adding your own proxy.
 
 Sign in with Google, grant the requested read-only health scopes, and your dashboard will load your synced Fitbit data.
 
@@ -63,8 +72,9 @@ Sign in with Google, grant the requested read-only health scopes, and your dashb
 | Issue | Fix |
 |-------|-----|
 | 403 insufficient scopes | Sign out, revoke access at [Google Account permissions](https://myaccount.google.com/permissions), sign in again |
-| Empty charts | Ensure Fitbit has synced to the Fitbit app recently |
-| CORS / network errors | Confirm `node server.js` is running on port 3001 |
+| Empty charts | Ensure Fitbit has synced to the Fitbit app recently; click ↻ refresh on the dashboard |
+| CORS / network errors | Restart `npm run dev` — confirm the Vite dev server is running on port 3000 |
+| No data after proxy change | Hard refresh; sign out and back in if the OAuth token expired |
 
 ## API reference
 
@@ -75,12 +85,15 @@ Sign in with Google, grant the requested read-only health scopes, and your dashb
 ## Project structure
 
 ```
-server.js                 # Local dev proxy → health.googleapis.com
-src/lib/healthApi.js      # OAuth + API fetchers
+vite.config.js            # Dev/preview proxy → health.googleapis.com/v4
+src/lib/healthApi.js      # OAuth, pagination, API fetchers
 src/hooks/useHealthData.js
 src/pages/                # Login, Dashboard (Overview / Insights / Sleep / Workouts)
 src/components/
+src/lib/                  # insightsUtils, sleepUtils, workoutUtils
 ```
+
+Local IDE folders (`.cursor/`, `.agents/`) are gitignored — personal Cursor/agent config stays on your machine.
 
 ## Extending
 
@@ -90,4 +103,6 @@ To add a data type:
 2. Wire it in `src/hooks/useHealthData.js`
 3. Parse and chart it in the relevant page or component
 
-Available data types include: `steps`, `heart-rate`, `sleep`, `distance`, `active-minutes`, `exercise`, `daily-heart-rate-variability`, `daily-resting-heart-rate`, `daily-oxygen-saturation`, and more — see the [data types reference](https://developers.google.com/health/data-types).
+For session types (`sleep`, `exercise`) use pagination — the API returns max 25 per page; see `fetchAllDataPoints()` in `healthApi.js`.
+
+Available data types include: `steps`, `heart-rate`, `sleep`, `distance`, `active-minutes`, `active-zone-minutes`, `daily-vo2-max`, `sedentary-period`, `exercise`, `daily-heart-rate-variability`, `daily-resting-heart-rate`, `daily-oxygen-saturation`, and more — see the [data types reference](https://developers.google.com/health/data-types).

@@ -110,8 +110,9 @@ export function workoutSummary(workouts) {
       durationMin: acc.durationMin + (w.durationMin || 0),
       calories: acc.calories + (w.calories || 0),
       distanceKm: acc.distanceKm + (w.distanceMm ? w.distanceMm / 1_000_000 : 0),
+      activeZoneMin: acc.activeZoneMin + (w.activeZoneMin || 0),
     }),
-    { count: 0, durationMin: 0, calories: 0, distanceKm: 0 },
+    { count: 0, durationMin: 0, calories: 0, distanceKm: 0, activeZoneMin: 0 },
   );
 }
 

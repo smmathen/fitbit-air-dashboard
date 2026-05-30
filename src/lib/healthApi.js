@@ -19,7 +19,7 @@ export const SCOPES = [
   'https://www.googleapis.com/auth/googlehealth.sleep.readonly',
 ].join(' ');
 
-const BASE_URL = 'http://localhost:3001/health';
+const BASE_URL = '/api/health';
 const USER = '/users/me';
 
 // Filter field names differ from endpoint data type names — see API docs
@@ -28,6 +28,7 @@ const FILTER_NAMES = {
   'daily-heart-rate-variability': 'dailyHeartRateVariability',
   'daily-oxygen-saturation': 'dailyOxygenSaturation',
   'daily-resting-heart-rate': 'dailyRestingHeartRate',
+  'daily-vo2-max': 'dailyVo2Max',
   sleep: 'sleep',
 };
 
@@ -125,7 +126,7 @@ async function apiRequest(method, path, { params, body } = {}) {
   const token = accessToken || getStoredToken();
   if (!token) throw new Error('Not authenticated');
 
-  const url = new URL(`${BASE_URL}${path}`);
+  const url = new URL(`${BASE_URL}${path}`, window.location.origin);
   if (params) {
     Object.entries(params).forEach(([k, v]) => {
       if (v != null) url.searchParams.set(k, v);
@@ -175,13 +176,38 @@ export async function fetchDailyRollup(dataType, startDate, endDate) {
 }
 
 /**
- * List raw data points for a data type with a time filter
+ * List raw data points for a data type with a time filter (single page)
  * @param {string} dataType
  * @param {string} filter  AIP-160 filter expression
  * @param {number} pageSize
+ * @param {string} [pageToken]
  */
-export async function fetchDataPoints(dataType, filter, pageSize = 500) {
-  return apiGet(`${USER}/dataTypes/${dataType}/dataPoints`, { filter, pageSize });
+export async function fetchDataPoints(dataType, filter, pageSize = 500, pageToken) {
+  const params = { filter, pageSize };
+  if (pageToken) params.pageToken = pageToken;
+  return apiGet(`${USER}/dataTypes/${dataType}/dataPoints`, params);
+}
+
+/** Safety cap: 40 pages × 25 = 1000 sessions max per query */
+const MAX_SESSION_PAGES = 40;
+
+/**
+ * Fetch all pages for session/list endpoints (sleep & exercise cap at 25/page)
+ * @returns {{ dataPoints: object[] }}
+ */
+async function fetchAllDataPoints(dataType, filter, pageSize = 25) {
+  const dataPoints = [];
+  let pageToken;
+  let pages = 0;
+
+  do {
+    const page = await fetchDataPoints(dataType, filter, pageSize, pageToken);
+    if (page?.dataPoints?.length) dataPoints.push(...page.dataPoints);
+    pageToken = page?.nextPageToken;
+    pages += 1;
+  } while (pageToken && pages < MAX_SESSION_PAGES);
+
+  return { dataPoints };
 }
 
 function dailySummaryFilter(dataType, startDate, endDate) {
@@ -190,18 +216,18 @@ function dailySummaryFilter(dataType, startDate, endDate) {
   return `${name}.date >= "${startDate}" AND ${name}.date < "${end}"`;
 }
 
-/** Fetch sleep sessions (max 25 per request per API) */
+/** Fetch all sleep sessions in range (paginated, 25 per API page) */
 export async function fetchSleep(startDate, endDate) {
   const end = nextDay(endDate);
   const filter = `sleep.interval.civil_end_time >= "${startDate}" AND sleep.interval.civil_end_time < "${end}"`;
-  return apiGet(`${USER}/dataTypes/sleep/dataPoints`, { filter, pageSize: 25 });
+  return fetchAllDataPoints('sleep', filter, 25);
 }
 
-/** Fetch exercise / workout sessions */
+/** Fetch all exercise / workout sessions in range (paginated, 25 per API page) */
 export async function fetchExercise(startDate, endDate) {
   const end = nextDay(endDate);
   const filter = `exercise.interval.civil_start_time >= "${startDate}" AND exercise.interval.civil_start_time < "${end}"`;
-  return apiGet(`${USER}/dataTypes/exercise/dataPoints`, { filter, pageSize: 25 });
+  return fetchAllDataPoints('exercise', filter, 25);
 }
 
 /** Fetch heart rate data (intraday) */
@@ -231,6 +257,24 @@ export async function fetchRestingHR(startDate, endDate) {
   return fetchDataPoints(
     'daily-resting-heart-rate',
     dailySummaryFilter('daily-resting-heart-rate', startDate, endDate),
+  );
+}
+
+/** Fetch daily active zone minutes rollup */
+export async function fetchActiveZoneMinutes(startDate, endDate) {
+  return fetchDailyRollup('active-zone-minutes', startDate, endDate);
+}
+
+/** Fetch daily sedentary time rollup */
+export async function fetchSedentaryTime(startDate, endDate) {
+  return fetchDailyRollup('sedentary-period', startDate, endDate);
+}
+
+/** Fetch daily VO2 max (cardio fitness) */
+export async function fetchVo2Max(startDate, endDate) {
+  return fetchDataPoints(
+    'daily-vo2-max',
+    dailySummaryFilter('daily-vo2-max', startDate, endDate),
   );
 }
 

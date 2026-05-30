@@ -76,6 +76,12 @@ export default function WorkoutPanel({ exerciseRaw }) {
           </span>
           <span className="workout-summary-label">Distance</span>
         </div>
+        <div className="workout-summary-stat">
+          <span className="workout-summary-val">
+            {summary.activeZoneMin > 0 ? Math.round(summary.activeZoneMin) : '—'}
+          </span>
+          <span className="workout-summary-label">Active zone min</span>
+        </div>
       </section>
 
       <section className="workout-list">

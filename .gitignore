@@ -35,6 +35,10 @@ Thumbs.db
 *.swo
 *~
 
+# Cursor / agent IDE config (local only — not shared via repo)
+.cursor/
+.agents/
+
 # Test coverage
 coverage/
 
